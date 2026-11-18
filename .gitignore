@@ -2,3 +2,4 @@
 .idea
 .plist
 build/*
+__pycache__

@@ -6,6 +6,7 @@ all:
 # builds the gui application
 build:
 	make clean
+	mkdir -p build/Keywi.app/Contents/MacOS
 
 	swiftc -target x86_64-apple-macos12.4 src/app/main.swift -o build/main-amd64
 	swiftc -target arm64-apple-macos12.4 src/app/main.swift -o build/main-arm64
@@ -13,7 +14,6 @@ build:
 	lipo -create build/main-amd64 build/main-arm64 -o build/Keywi
 	chmod +x build/Keywi
 
-	mkdir -p build/Keywi.app/Contents/MacOS
 	cp build/Keywi build/Keywi.app/Contents/MacOS/Keywi
 
 # installs the cli application

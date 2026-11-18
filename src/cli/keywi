@@ -3,6 +3,8 @@
 import os
 import os.path
 import sys
+import difflib
+import subprocess
 
 
 keycodes = {
@@ -169,26 +171,29 @@ def add_mapping(source_key, destination_key):
     os.system('hidutil property --set ' + "'" + '{"UserKeyMapping":[' + concatenated_mappings + ']}' + "'")
 
 
+
 args = sys.argv[1:]
 if len(args) == 0:
-    print("usage: keywi [options] source_key destination_key")
-
-source = None
-destination = None
-
-for arg in args:
-    if arg.startswith("-"):
-        if arg == "-clear":
-            os.system("""hidutil property --set '{"UserKeyMapping":[]}'""")
-        if arg == "-get":
-            os.system("""hidutil property --get 'UserKeyMapping'""")
-    else:
-        if arg not in keycodes:
-            continue
-        if source is None:
-            source = arg
+    print("Error in Syntax: keywi <command> <command_arguments>")
+elif args[0] == "clear":
+    os.system("""hidutil property --set '{"UserKeyMapping":[]}'""")
+elif args[0] == "get":
+    os.system("""hidutil property --get 'UserKeyMapping'""")
+elif args[0] == "set":
+    if len(args) != 3:
+        print("Error in Syntax: keywi set <source_key> <destination_key>")
+    elif args[1] not in keycodes:
+        match = difflib.get_close_matches(args[1], keycodes.keys(), n=1)
+        if len(match) > 0:
+            print(f"Unknown keycode '{args[1]}'. Did you mean '{match[0]}'?")
         else:
-            destination = arg
+            print(f"Unknown keycode '{args[1]}'.")
+    elif args[2] not in keycodes:
+        match = difflib.get_close_matches(args[2], keycodes.keys(), n=1)
+        if len(match) > 0:
+            print(f"Unknown keycode '{args[2]}'. Did you mean '{match[0]}'?")
+        else:
+            print(f"Unknown keycode '{args[2]}'.")
+    else:
+        add_mapping(args[1], args[2])
 
-if destination is not None:
-    add_mapping(source, destination)
