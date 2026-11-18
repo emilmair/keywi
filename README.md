@@ -30,7 +30,6 @@ Keywi does NOT require:
 - Access to the Accessibility-API
 - Disabled System Integrity Protection
 - Root privileges
-- Any Dependencies
 
 ## Installation
 
