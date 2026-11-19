@@ -130,6 +130,25 @@ def key_to_id(key):
 AGENT_LABEL = "com.emilmair.keywi"
 AGENT_PATH = os.path.expanduser("~/Library/LaunchAgents/" + AGENT_LABEL + ".plist")
 
+def read_version():
+    script_path = os.path.realpath(__file__)
+    version_paths = [
+        script_path + ".version",
+        os.path.join(os.path.dirname(script_path), "..", "..", "VERSION"),
+    ]
+    for path in version_paths:
+        try:
+            with open(path, "r") as version_file:
+                version = version_file.read().strip()
+                if version:
+                    return version
+        except OSError:
+            pass
+    return "unknown"
+
+
+VERSION = read_version()
+
 def load_mappings():
     try:
         with open(AGENT_PATH, "rb") as f:
@@ -187,10 +206,13 @@ Usage:
   keywi start                              Start the Keywi LaunchAgent
   keywi stop                               Stop the Keywi LaunchAgent
   keywi status                             Show whether the service is running
+  keywi --version                          Show the Keywi version
   keywi help, -h, --help                   Show this help
 
 Keys use names such as caps_lock, left_command, a, return, or f1.
 """)
+elif args[0] in ("version", "--version", "-V"):
+    print(f"Keywi {VERSION}")
 elif args[0] == "clear":
     apply_mappings([])
 elif args[0] == "get":

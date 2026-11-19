@@ -21,7 +21,7 @@ Keywi can:
 - Remap keys instantly via App or CLI
 - Preserve mappings after logout or reboot
 - Import and export mappings
-- Run natively on Intel, M1 and M2
+- Run natively on Intel, and Apple Silicon
 - Do all this without impacting performance
 
 Keywi does NOT require:
@@ -74,6 +74,8 @@ sudo make install
 
 `keywi get` to see mappings
 
+`keywi --version` to see the installed version
+
 
 # Developement
 
@@ -89,6 +91,10 @@ Then build using Makefile
 ```
 make build
 ```
+
+## Versioning
+
+The shared version is stored in `VERSION` and is written into the app bundle and CLI installation. Update it for a release, then create a matching Git tag such as `v0.1.1`. The app uses the Git commit count as its build number by default; override it with `make BUILD_NUMBER=42 build` when needed. The CLI reports the shared version with `keywi --version`.
 
 ## FAQ
 

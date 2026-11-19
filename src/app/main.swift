@@ -25,6 +25,10 @@ let keys: [Key] = {
 
 struct Mapping: Codable, Equatable { let source: UInt64; let destination: UInt64 }
 
+final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let popover = NSPopover()
@@ -39,7 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.action = #selector(togglePopover(_:))
         statusItem.button?.target = self
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 320, height: 360)
+        popover.contentSize = NSSize(width: 320, height: 440)
         loadMappings()
         popover.contentViewController = KeywiViewController(delegate: self)
     }
@@ -57,6 +61,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard source.usage != destination.usage else { throw NSError(domain: "Keywi", code: 1, userInfo: [NSLocalizedDescriptionKey: "Choose two different keys."]) }
         mappings.removeAll { $0.source == source.usage }
         mappings.append(Mapping(source: source.usage, destination: destination.usage))
+        try applyMappings()
+    }
+
+    func updateMapping(_ mapping: Mapping, source: Key, destination: Key) throws {
+        guard source.usage != destination.usage else { throw NSError(domain: "Keywi", code: 1, userInfo: [NSLocalizedDescriptionKey: "Choose two different keys."]) }
+        guard let index = mappings.firstIndex(of: mapping) else {
+            throw NSError(domain: "Keywi", code: 5, userInfo: [NSLocalizedDescriptionKey: "This mapping no longer exists."])
+        }
+        guard !mappings.enumerated().contains(where: { $0.offset != index && $0.element.source == source.usage }) else {
+            throw NSError(domain: "Keywi", code: 6, userInfo: [NSLocalizedDescriptionKey: "A source key can only have one mapping."])
+        }
+        mappings[index] = Mapping(source: source.usage, destination: destination.usage)
         try applyMappings()
     }
 
@@ -90,6 +106,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     fileprivate func loadMappings() {
+        guard FileManager.default.fileExists(atPath: agentURL.path) else {
+            mappings = []
+            mappingLoadError = nil
+            return
+        }
         do {
             let data = try Data(contentsOf: agentURL)
             let plistObject = try PropertyListSerialization.propertyList(from: data, format: nil)
@@ -155,7 +176,13 @@ final class KeywiViewController: NSViewController {
     private let serviceStatus = NSTextField(labelWithString: "Checking service…")
     private let serviceButton = NSButton(title: "Start", target: nil, action: nil)
     private let serviceFeedback = NSTextField(wrappingLabelWithString: "")
-    private let mappingsText = NSTextField(wrappingLabelWithString: "")
+    private let mappingsSeparator = NSBox()
+    private let mappingsScrollView = NSScrollView()
+    private let mappingsDocumentView = FlippedView(frame: .zero)
+    private let addMappingButton = NSButton(title: "+ Add Mapping", target: nil, action: nil)
+    private var hasDraftMapping = false
+    private var draftSource: UInt64?
+    private var draftDestination: UInt64?
     private var serviceIsRunning = false
     private var serviceChangeInProgress = false
     private var serviceRefreshID = 0
@@ -164,50 +191,51 @@ final class KeywiViewController: NSViewController {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func loadView() {
-        let root = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 360))
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 440))
         root.wantsLayer = true
         view = root
 
         let title = NSTextField(labelWithString: "Keywi")
         title.font = .systemFont(ofSize: 20, weight: .semibold)
-        title.frame = NSRect(x: 16, y: 322, width: 180, height: 26)
+        title.frame = NSRect(x: 16, y: 402, width: 180, height: 26)
         root.addSubview(title)
 
         let quit = NSButton(title: "Quit", target: NSApp, action: #selector(NSApplication.terminate(_:)))
-        quit.frame = NSRect(x: 246, y: 320, width: 58, height: 28)
+        quit.frame = NSRect(x: 246, y: 400, width: 58, height: 28)
         root.addSubview(quit)
 
-        let subtitle = NSTextField(labelWithString: "Keyboard mappings")
-        subtitle.textColor = .secondaryLabelColor
-        subtitle.frame = NSRect(x: 16, y: 294, width: 280, height: 18)
-        root.addSubview(subtitle)
-
-        serviceStatus.frame = NSRect(x: 16, y: 260, width: 190, height: 20)
+        serviceStatus.frame = NSRect(x: 16, y: 368, width: 190, height: 20)
         root.addSubview(serviceStatus)
 
-        serviceButton.frame = NSRect(x: 218, y: 254, width: 86, height: 28)
+        serviceButton.frame = NSRect(x: 218, y: 362, width: 86, height: 28)
         serviceButton.target = self
         serviceButton.action = #selector(toggleService(_:))
         serviceButton.isEnabled = false
         root.addSubview(serviceButton)
 
-        serviceFeedback.frame = NSRect(x: 16, y: 224, width: 288, height: 26)
+        serviceFeedback.frame = NSRect(x: 16, y: 332, width: 288, height: 26)
         serviceFeedback.font = .systemFont(ofSize: 11)
         serviceFeedback.textColor = .systemRed
         serviceFeedback.maximumNumberOfLines = 2
         serviceFeedback.isHidden = true
         root.addSubview(serviceFeedback)
 
-        let separator = NSBox(frame: NSRect(x: 16, y: 218, width: 288, height: 1))
-        separator.boxType = .separator
-        root.addSubview(separator)
+        mappingsSeparator.boxType = .separator
+        root.addSubview(mappingsSeparator)
 
-        mappingsText.frame = NSRect(x: 16, y: 16, width: 288, height: 194)
-        mappingsText.font = .systemFont(ofSize: 14)
-        mappingsText.textColor = .labelColor
-        mappingsText.lineBreakMode = .byWordWrapping
-        mappingsText.maximumNumberOfLines = 0
-        root.addSubview(mappingsText)
+        mappingsScrollView.frame = NSRect(x: 16, y: 54, width: 288, height: 236)
+        mappingsScrollView.hasVerticalScroller = true
+        mappingsScrollView.autohidesScrollers = true
+        mappingsScrollView.borderType = .noBorder
+        mappingsScrollView.drawsBackground = false
+        mappingsScrollView.documentView = mappingsDocumentView
+        root.addSubview(mappingsScrollView)
+
+        addMappingButton.frame = NSRect(x: 16, y: 16, width: 288, height: 30)
+        addMappingButton.target = self
+        addMappingButton.action = #selector(beginAddingMapping(_:))
+        root.addSubview(addMappingButton)
+        layoutMappingsArea()
 
         NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: .keywiMappingsChanged, object: nil)
         refresh()
@@ -216,14 +244,10 @@ final class KeywiViewController: NSViewController {
     @objc private func refresh() {
         guard let app = appDelegate else { return }
         app.loadMappings()
-        let mappings = app.mappingsForDisplay
         if let error = app.mappingLoadError {
-            mappingsText.stringValue = "Could not read mappings: \(error)"
-        } else if mappings.isEmpty {
-            mappingsText.stringValue = "No mappings configured"
-        } else {
-            mappingsText.stringValue = mappings.map { "\(app.keyLabel($0.source))    →    \(app.keyLabel($0.destination))" }.joined(separator: "\n")
+            showFeedback("Could not read mappings: \(error)")
         }
+        renderMappings()
 
         guard !serviceChangeInProgress else { return }
         serviceRefreshID += 1
@@ -244,13 +268,223 @@ final class KeywiViewController: NSViewController {
         }
     }
 
+    private func renderMappings() {
+        guard let app = appDelegate else { return }
+        mappingsDocumentView.subviews.forEach { $0.removeFromSuperview() }
+
+        let mappings = app.mappingsForDisplay
+        let rowCount = mappings.count + (hasDraftMapping ? 1 : 0)
+        let headerHeight: CGFloat = 24
+        let rowHeight: CGFloat = 32
+        let contentSize = mappingsScrollView.contentSize
+        let documentHeight = max(contentSize.height, headerHeight + CGFloat(max(rowCount, 1)) * rowHeight)
+        let documentWidth = contentSize.width
+        mappingsDocumentView.frame = NSRect(x: 0, y: 0, width: documentWidth, height: documentHeight)
+
+        let fromHeader = NSTextField(labelWithString: "From")
+        fromHeader.frame = NSRect(x: 0, y: 2, width: 110, height: 18)
+        fromHeader.textColor = .secondaryLabelColor
+        mappingsDocumentView.addSubview(fromHeader)
+
+        let toHeader = NSTextField(labelWithString: "To")
+        toHeader.frame = NSRect(x: 130, y: 2, width: 110, height: 18)
+        toHeader.textColor = .secondaryLabelColor
+        mappingsDocumentView.addSubview(toHeader)
+
+        if mappings.isEmpty && !hasDraftMapping {
+            let emptyLabel = NSTextField(labelWithString: "No mappings configured")
+            emptyLabel.frame = NSRect(x: 0, y: headerHeight + 4, width: documentWidth, height: 20)
+            emptyLabel.textColor = .secondaryLabelColor
+            mappingsDocumentView.addSubview(emptyLabel)
+        }
+
+        for (index, mapping) in mappings.enumerated() {
+            addMappingRow(index: index, source: mapping.source, destination: mapping.destination, isDraft: false, mappings: mappings)
+        }
+        if hasDraftMapping {
+            addMappingRow(index: mappings.count, source: draftSource, destination: draftDestination, isDraft: true, mappings: mappings)
+            addMappingButton.isEnabled = false
+        } else {
+            addMappingButton.isEnabled = true
+        }
+    }
+
+    private func addMappingRow(index: Int, source: UInt64?, destination: UInt64?, isDraft: Bool, mappings: [Mapping]) {
+        guard let app = appDelegate else { return }
+        let rowY = CGFloat(24 + index * 32)
+
+        var sourceOptions = keys.filter { key in
+            (destination.map { key.usage != $0 } ?? true) && !mappings.enumerated().contains { otherIndex, mapping in
+                otherIndex != index && mapping.source == key.usage
+            }
+        }
+        if let source, !sourceOptions.contains(where: { $0.usage == source }) {
+            sourceOptions.insert(Key(name: "", label: app.keyLabel(source), usage: source), at: 0)
+        }
+
+        var destinationOptions = keys.filter { key in source.map { key.usage != $0 } ?? true }
+        if let destination, !destinationOptions.contains(where: { $0.usage == destination }) {
+            destinationOptions.insert(Key(name: "", label: app.keyLabel(destination), usage: destination), at: 0)
+        }
+
+        let sourcePopup = makeKeyPopup(options: sourceOptions, selected: source, placeholder: isDraft ? "From…" : nil, role: "mapping.source", row: index)
+        sourcePopup.frame = NSRect(x: 0, y: rowY + 3, width: 110, height: 26)
+        mappingsDocumentView.addSubview(sourcePopup)
+
+        let arrow = NSTextField(labelWithString: "→")
+        arrow.alignment = .center
+        arrow.frame = NSRect(x: 112, y: rowY + 7, width: 16, height: 18)
+        arrow.textColor = .secondaryLabelColor
+        mappingsDocumentView.addSubview(arrow)
+
+        let destinationPopup = makeKeyPopup(options: destinationOptions, selected: destination, placeholder: isDraft ? "To…" : nil, role: "mapping.destination", row: index)
+        destinationPopup.frame = NSRect(x: 130, y: rowY + 3, width: 110, height: 26)
+        mappingsDocumentView.addSubview(destinationPopup)
+
+        let removeButton = NSButton(title: "−", target: self, action: #selector(removeMapping(_:)))
+        removeButton.tag = index
+        removeButton.toolTip = isDraft ? "Cancel new mapping" : "Remove mapping"
+        removeButton.frame = NSRect(x: 244, y: rowY + 3, width: 26, height: 26)
+        mappingsDocumentView.addSubview(removeButton)
+    }
+
+    private func makeKeyPopup(options: [Key], selected: UInt64?, placeholder: String?, role: String, row: Int) -> NSPopUpButton {
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        if let placeholder {
+            popup.addItem(withTitle: placeholder)
+            popup.lastItem?.representedObject = NSNull()
+        }
+        for key in options {
+            popup.addItem(withTitle: key.label)
+            popup.lastItem?.representedObject = NSNumber(value: key.usage)
+        }
+        if let selected, let index = options.firstIndex(where: { $0.usage == selected }) {
+            popup.selectItem(at: index + (placeholder == nil ? 0 : 1))
+        } else if placeholder != nil {
+            popup.selectItem(at: 0)
+        }
+        popup.identifier = NSUserInterfaceItemIdentifier(role)
+        popup.tag = row
+        popup.target = self
+        popup.action = #selector(mappingSelectionChanged(_:))
+        return popup
+    }
+
+    @objc private func beginAddingMapping(_ sender: Any?) {
+        guard !hasDraftMapping else { return }
+        hasDraftMapping = true
+        draftSource = nil
+        draftDestination = nil
+        clearFeedback()
+        renderMappings()
+        scrollMappingsToBottom()
+    }
+
+    @objc private func mappingSelectionChanged(_ sender: NSPopUpButton) {
+        guard let app = appDelegate,
+              let role = sender.identifier?.rawValue,
+              let usage = (sender.selectedItem?.representedObject as? NSNumber)?.uint64Value else { return }
+        let index = sender.tag
+        if index < app.mappingsForDisplay.count {
+            let current = app.mappingsForDisplay[index]
+            let source = role == "mapping.source" ? usage : current.source
+            let destination = role == "mapping.destination" ? usage : current.destination
+            applyMapping(current, source: source, destination: destination)
+            return
+        }
+
+        guard hasDraftMapping, index == app.mappingsForDisplay.count else { return }
+        if role == "mapping.source" { draftSource = usage }
+        if role == "mapping.destination" { draftDestination = usage }
+        if let source = draftSource, let destination = draftDestination {
+            let sourceKey = keys.first { $0.usage == source } ?? Key(name: "", label: app.keyLabel(source), usage: source)
+            let destinationKey = keys.first { $0.usage == destination } ?? Key(name: "", label: app.keyLabel(destination), usage: destination)
+            do {
+                try app.addMapping(source: sourceKey, destination: destinationKey)
+                hasDraftMapping = false
+                draftSource = nil
+                draftDestination = nil
+                clearFeedback()
+                renderMappings()
+            } catch {
+                app.loadMappings()
+                showFeedback(error.localizedDescription)
+                renderMappings()
+            }
+        } else {
+            renderMappings()
+        }
+    }
+
+    private func applyMapping(_ current: Mapping, source: UInt64, destination: UInt64) {
+        guard let app = appDelegate else { return }
+        let sourceKey = keys.first { $0.usage == source } ?? Key(name: "", label: app.keyLabel(source), usage: source)
+        let destinationKey = keys.first { $0.usage == destination } ?? Key(name: "", label: app.keyLabel(destination), usage: destination)
+        do {
+            try app.updateMapping(current, source: sourceKey, destination: destinationKey)
+            clearFeedback()
+        } catch {
+            app.loadMappings()
+            showFeedback(error.localizedDescription)
+            renderMappings()
+        }
+    }
+
+    @objc private func removeMapping(_ sender: NSButton) {
+        guard let app = appDelegate else { return }
+        if hasDraftMapping && sender.tag == app.mappingsForDisplay.count {
+            hasDraftMapping = false
+            draftSource = nil
+            draftDestination = nil
+            renderMappings()
+            return
+        }
+        let mappings = app.mappingsForDisplay
+        guard mappings.indices.contains(sender.tag) else { return }
+        do {
+            try app.removeMapping(mappings[sender.tag])
+            clearFeedback()
+        } catch {
+            app.loadMappings()
+            showFeedback(error.localizedDescription)
+            renderMappings()
+        }
+    }
+
+    private func showFeedback(_ message: String) {
+        serviceFeedback.stringValue = message
+        serviceFeedback.isHidden = false
+        layoutMappingsArea()
+    }
+
+    private func clearFeedback() {
+        serviceFeedback.stringValue = ""
+        serviceFeedback.isHidden = true
+        layoutMappingsArea()
+    }
+
+    private func layoutMappingsArea() {
+        let separatorY: CGFloat = serviceFeedback.isHidden ? 354 : 326
+        mappingsSeparator.frame = NSRect(x: 16, y: separatorY, width: 288, height: 1)
+        mappingsScrollView.frame = NSRect(x: 16, y: 54, width: 288, height: separatorY - 8 - 54)
+        if mappingsDocumentView.frame.height < mappingsScrollView.contentSize.height {
+            mappingsDocumentView.frame.size.height = mappingsScrollView.contentSize.height
+        }
+    }
+
+    private func scrollMappingsToBottom() {
+        let documentHeight = mappingsDocumentView.frame.height
+        let visibleHeight = mappingsScrollView.contentView.bounds.height
+        mappingsScrollView.contentView.scroll(to: NSPoint(x: 0, y: max(0, documentHeight - visibleHeight)))
+        mappingsScrollView.reflectScrolledClipView(mappingsScrollView.contentView)
+    }
+
     @objc private func toggleService(_ sender: Any?) {
         guard let app = appDelegate, !serviceChangeInProgress else { return }
         let shouldRun = !serviceIsRunning
         serviceChangeInProgress = true
         serviceRefreshID += 1
-        serviceFeedback.stringValue = ""
-        serviceFeedback.isHidden = true
+        clearFeedback()
         serviceButton.isEnabled = false
         serviceButton.title = shouldRun ? "Starting…" : "Stopping…"
         serviceStatus.stringValue = shouldRun ? "Starting service…" : "Stopping service…"
@@ -268,8 +502,7 @@ final class KeywiViewController: NSViewController {
                 guard let self else { return }
                 self.serviceChangeInProgress = false
                 if let failure {
-                    self.serviceFeedback.stringValue = failure
-                    self.serviceFeedback.isHidden = false
+                    self.showFeedback(failure)
                 }
                 self.refresh()
             }
