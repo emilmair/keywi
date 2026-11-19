@@ -35,8 +35,6 @@ Keywi does NOT require:
 
 ### App
 
-> _!!! WARNING: The app is still in early stages of development. It is stable but lacks functionality_
-
 Download the latest release from the [releases section](https://github.com/randmeer/keywi/releases)
 of this repository.
 
