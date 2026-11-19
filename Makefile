@@ -15,6 +15,14 @@ build:
 	chmod +x build/Keywi
 
 	cp build/Keywi build/Keywi.app/Contents/MacOS/Keywi
+	/usr/bin/plutil -create xml1 build/Keywi.app/Contents/Info.plist
+	/usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string com.emilmair.keywi" build/Keywi.app/Contents/Info.plist
+	/usr/libexec/PlistBuddy -c "Add :CFBundleName string Keywi" build/Keywi.app/Contents/Info.plist
+	/usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string Keywi" build/Keywi.app/Contents/Info.plist
+	/usr/libexec/PlistBuddy -c "Add :CFBundlePackageType string APPL" build/Keywi.app/Contents/Info.plist
+	/usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 1" build/Keywi.app/Contents/Info.plist
+	/usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 1.0" build/Keywi.app/Contents/Info.plist
+	/usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" build/Keywi.app/Contents/Info.plist
 
 # installs the cli application
 install:

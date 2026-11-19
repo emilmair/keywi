@@ -5,6 +5,8 @@ import os.path
 import sys
 import difflib
 import subprocess
+import plistlib
+import json
 
 
 keycodes = {
@@ -125,60 +127,77 @@ def key_to_id(key):
     return "0x7000000" + keycodes[key][0]
 
 
-def generate_single_mapping(source_key, destination_key):
-    return '{"HIDKeyboardModifierMappingSrc":' + key_to_id(source_key) + ',"HIDKeyboardModifierMappingDst":' + key_to_id(destination_key) + '}'
+AGENT_LABEL = "com.emilmair.keywi"
+AGENT_PATH = os.path.expanduser("~/Library/LaunchAgents/" + AGENT_LABEL + ".plist")
 
+def load_mappings():
+    try:
+        with open(AGENT_PATH, "rb") as f:
+            config = plistlib.load(f)
+            return json.loads(config["ProgramArguments"][-1]).get("UserKeyMapping", [])
+    except FileNotFoundError:
+        return []
 
-def concatenate_mappings(list_of_single_mappings):
-    string = ",".join(list_of_single_mappings)
-    return string
+def apply_mappings(mappings):
+    hid_json = json.dumps({"UserKeyMapping": mappings}, separators=(",", ":"))
+    config = {"Label": AGENT_LABEL, "ProgramArguments": ["/usr/bin/hidutil", "property", "--set", hid_json], "RunAtLoad": True}
+    os.makedirs(os.path.dirname(AGENT_PATH), exist_ok=True)
+    with open(AGENT_PATH, "wb") as f:
+        plistlib.dump(config, f)
+    subprocess.run(["/usr/bin/hidutil", "property", "--set", hid_json], check=True)
 
-
-def write_config(concatenated_mappings):
-    string = '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDsPropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>tv.rande.keywi</string><key>ProgramArguments</key><array><string>/usr/bin/hidutil</string><string>property</string><string>--set</string><string>{"UserKeyMapping":[' + concatenated_mappings + ']}</string></array><key>RunAtLoad</key><true/></dict></plist>'
-    f = open(os.path.expanduser("~/Library/LaunchAgents/tv.rande.keywi.plist"), "w")
-    f.write(string)
-    f.close()
-
-
-def get_existing_mappings():
-    string = os.popen("hidutil property --get 'UserKeyMapping'").read()
-    if len(string) < 5:
-        return None
-    listo = string.split()
-    comma = True
-    for i in range(len(listo)):
-        if listo[i] == 'HIDKeyboardModifierMappingDst' or listo[i] == 'HIDKeyboardModifierMappingSrc':
-            listo[i] = '"' + listo[i] + '"'
-        if listo[i] == "=":
-            listo[i] = ":"
-            listo[i+1] =  "0x" + hex(int(listo[i+1][:-1])).upper()[2:]
-            if comma:
-                listo.insert(i+2, ",")
-            comma = not comma
-    return "".join(listo)[1:-1]
-
+def service_command(action):
+    domain = "gui/" + str(os.getuid())
+    target = domain + "/" + AGENT_LABEL
+    if action == "start":
+        if not os.path.isfile(AGENT_PATH):
+            # Create a valid, empty LaunchAgent before bootstrapping.
+            apply_mappings([])
+        result = subprocess.run(["/bin/launchctl", "bootstrap", domain, AGENT_PATH])
+        if result.returncode != 0:
+            # A loaded service is already running; verify instead of treating it as an error.
+            check = subprocess.run(["/bin/launchctl", "print", target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if check.returncode != 0:
+                raise SystemExit(result.returncode)
+    elif action == "stop":
+        result = subprocess.run(["/bin/launchctl", "bootout", target])
+        if result.returncode != 0:
+            check = subprocess.run(["/bin/launchctl", "print", target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if check.returncode == 0:
+                raise SystemExit(result.returncode)
+    else:
+        check = subprocess.run(["/bin/launchctl", "print", target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print("running" if check.returncode == 0 else "stopped")
 
 def add_mapping(source_key, destination_key):
-    existing_mappings = get_existing_mappings()
-    new_mapping = generate_single_mapping(source_key, destination_key)
-
-    if existing_mappings is None:
-        concatenated_mappings = new_mapping
-    else:
-        concatenated_mappings = concatenate_mappings([existing_mappings, new_mapping])
-    write_config(concatenated_mappings)
-    os.system('hidutil property --set ' + "'" + '{"UserKeyMapping":[' + concatenated_mappings + ']}' + "'")
-
+    src, dst = int(key_to_id(source_key), 16), int(key_to_id(destination_key), 16)
+    mappings = [m for m in load_mappings() if int(m["HIDKeyboardModifierMappingSrc"]) != src]
+    mappings.append({"HIDKeyboardModifierMappingSrc": src, "HIDKeyboardModifierMappingDst": dst})
+    apply_mappings(mappings)
 
 
 args = sys.argv[1:]
-if len(args) == 0:
-    print("Error in Syntax: keywi <command> <command_arguments>")
+if len(args) == 0 or args[0] in ("help", "-h", "--help"):
+    print("""Keywi - macOS keyboard remapping
+
+Usage:
+  keywi set <source_key> <destination_key>  Add or replace a mapping
+  keywi get                                 List saved mappings
+  keywi clear                              Remove all mappings
+  keywi start                              Start the Keywi LaunchAgent
+  keywi stop                               Stop the Keywi LaunchAgent
+  keywi status                             Show whether the service is running
+  keywi help, -h, --help                   Show this help
+
+Keys use names such as caps_lock, left_command, a, return, or f1.
+""")
 elif args[0] == "clear":
-    os.system("""hidutil property --set '{"UserKeyMapping":[]}'""")
+    apply_mappings([])
 elif args[0] == "get":
-    os.system("""hidutil property --get 'UserKeyMapping'""")
+    for mapping in load_mappings():
+        print(mapping)
+elif args[0] in ("start", "stop", "status"):
+    service_command(args[0])
 elif args[0] == "set":
     if len(args) != 3:
         print("Error in Syntax: keywi set <source_key> <destination_key>")
@@ -196,4 +215,3 @@ elif args[0] == "set":
             print(f"Unknown keycode '{args[2]}'.")
     else:
         add_mapping(args[1], args[2])
-
